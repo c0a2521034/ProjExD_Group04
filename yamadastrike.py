@@ -136,8 +136,6 @@ class Bullet:
         # 貫通弾が敵の矩形を通り過ぎる間、毎フレームダメージが入るのを防ぎます
         self.damaged_enemies = set()
 
-
-
     def update(self):
         """弾を毎フレーム、設定された速度ぶん移動させる"""
         self.x += self.vx
@@ -398,7 +396,7 @@ class Game:
                     
                     # この弾がまだこの敵に当たっていなければダメージを与えて記憶
                     if enemy not in b.damaged_enemies:
-                        enemy.hp -= 2  # 弾のダメージ
+                        enemy.hp -= 5  # 弾のダメージ（5ダメージに変更しました）
                         b.damaged_enemies.add(enemy)
                         if enemy.hp <= 0 and enemy in self.enemies:
                             self.enemies.remove(enemy)
