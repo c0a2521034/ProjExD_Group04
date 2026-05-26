@@ -7,10 +7,8 @@ import pygame as pg
 WIDTH = 450
 HEIGHT = 800
 
-try:
-    os.chdir(os.path.dirname(os.path.abspath(__file__)))
-except:
-    pass
+# try...except は一切使用していません
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 STAGE_BORDER = (255, 215, 0)
 LINE_COLOR = (255, 0, 0)
@@ -225,6 +223,33 @@ class item:
         
 
 
+class Bullet:
+    """味方から発射される十字弾のクラス"""
+    def __init__(self, x, y, vx, vy, size=20):
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
+        self.size = size
+        # 【多段ヒット防止用】この弾が既にダメージを与えた敵を記録する集合(Set)
+        # 貫通弾が敵の矩形を通り過ぎる間、毎フレームダメージが入るのを防ぎます
+        self.damaged_enemies = set()
+
+    def update(self):
+        """弾を毎フレーム、設定された速度ぶん移動させる"""
+        self.x += self.vx
+        self.y += self.vy
+
+    def is_offscreen(self):
+        """弾が上下左右の画面外へ完全に消え去ったかを判定する"""
+        return (self.x < -50 or self.x > WIDTH + 50 or
+                self.y < -50 or self.y > HEIGHT + 50)
+
+    def draw(self, screen):
+        # 水色の円で貫通弾を描画します
+        pg.draw.circle(screen, (0, 255, 255), (int(self.x), int(self.y)), self.size // 2)
+
+
 class GameUI:
     def __init__(self):
         self.bg_img = pg.transform.scale(pg.image.load("haikei1.png").convert_alpha(), (WIDTH, HEIGHT))
@@ -344,6 +369,10 @@ class Game:
 
         # 追加機能変更点　ゲームリセット時にアイテムのインスタンスを作成（画面右下に位置するように）
         self.game_item = item(self.item_image, 380, 645)
+        
+        self.bullets = []  # 画面上の弾のリスト
+        self.triggered_allies = set()  # 1ターンの間にすでに弾を出した味方を記憶
+        
         self.current_turn = 0
         self.is_dragging = False
         self.left_turns = 9
@@ -362,6 +391,15 @@ class Game:
         x = random.randint(30, WIDTH - 80)
         y = random.randint(50, 450)
         self.obstacles.append(Obstacle(x, y))
+    def spawn_cross_bullets(self, ally):
+        """味方の中心から上下左右に弾を発射する"""
+        cx, cy = ally.center
+        speed = 12.0  # 弾の速度
+        
+        self.bullets.append(Bullet(cx, cy, 0, -speed))  # 上
+        self.bullets.append(Bullet(cx, cy, 0, speed))   # 下
+        self.bullets.append(Bullet(cx, cy, -speed, 0))  # 左
+        self.bullets.append(Bullet(cx, cy, speed, 0))   # 右
 
     def handle_events(self):
         mouse_pos = pg.mouse.get_pos()
@@ -398,6 +436,8 @@ class Game:
 
                     if dist > 5:
                         p.launch(dx, dy, dist)
+                        # 新しく引っ張って弾いた時に、発動済み履歴をリセットする
+                        self.triggered_allies.clear()
                         self.current_turn = (self.current_turn + 1) % 3
 
             elif self.game_state in ("GAMEOVER", "CLEAR"):
@@ -413,13 +453,31 @@ class Game:
             was_moving = player.is_moving
             player.update_movement()
 
+        # 全プレイヤーの移動更新と敵・味方との衝突判定
+        for player in self.players:
+            was_moving = player.is_moving
+            player.update_movement()
+            
+            # 移動中なら当たり判定をチェック
             if player.is_moving:
+                # 敵との衝突判定
                 for enemy in list(self.enemies):
                     if enemy.check_collision(player):
                         if enemy.hp <= 0:
                             self.enemies.remove(enemy)
                 for obstacle in self.obstacles:
                     obstacle.check_collision(player)
+                
+                # 味方との衝突判定（友情コンボの発動）
+                for ally in self.players:
+                    if player != ally and ally not in self.triggered_allies:
+                        if (player.x < ally.x + ally.size and
+                            player.x + player.size > ally.x and
+                            player.y < ally.y + ally.size and
+                            player.y + player.size > ally.y):
+                            
+                            self.triggered_allies.add(ally)
+                            self.spawn_cross_bullets(ally)
 
             # ★★★ 停止した瞬間の処理（レーザー発動） ★★★
             if was_moving and not player.is_moving:
@@ -452,6 +510,36 @@ class Game:
                 
                     if self.left_turns <= 0:
                         self.game_state = "GAMEOVER"
+                # 動いているキャラが他にいないか確認してからターン消費
+                if not any(pl.is_moving for pl in self.players):
+                    if len(self.enemies) > 0:
+                        self.left_turns -= 1
+                        if self.left_turns <= 0:
+                            self.game_state = "GAMEOVER"
+
+        # 弾の移動と敵との衝突判定
+        for b in list(self.bullets):
+            b.update()
+            
+            # 画面外に出たらリストから削除
+            if b.is_offscreen():
+                self.bullets.remove(b)
+                continue
+                
+            # 弾と敵の当たり判定（貫通仕様）
+            b_size = b.size
+            bx = b.x - b_size / 2
+            by = b.y - b_size / 2
+            for enemy in list(self.enemies):
+                if (bx < enemy.x + enemy.size and bx + b_size > enemy.x and
+                    by < enemy.y + enemy.size and by + b_size > enemy.y):
+                    
+                    # この弾がまだこの敵に当たっていなければダメージを与えて記憶
+                    if enemy not in b.damaged_enemies:
+                        enemy.hp -= 5  # 弾のダメージ（5ダメージに変更しました）
+                        b.damaged_enemies.add(enemy)
+                        if enemy.hp <= 0 and enemy in self.enemies:
+                            self.enemies.remove(enemy)
 
         # ★★★ レーザー表示時間のカウントダウン ★★★
         for enemy in self.enemies:
@@ -495,6 +583,11 @@ class Game:
             for player in self.players:
                 player.draw(self.screen)
 
+                
+            # 画面上の弾を描画
+            for b in self.bullets:
+                b.draw(self.screen)
+                
             if self.is_dragging and self.game_state == "PLAY":
                 p = self.players[self.current_turn]
                 self.ui.draw_guide_line(self.screen, p.center, pg.mouse.get_pos())
